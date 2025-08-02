@@ -1,4 +1,4 @@
-"""The OpenAI Conversation integration."""
+"""The Barnabee Assistant integration."""
 
 from __future__ import annotations
 
