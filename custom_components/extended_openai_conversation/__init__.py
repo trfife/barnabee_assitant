@@ -34,6 +34,7 @@ from homeassistant.helpers import (
 from homeassistant.helpers.httpx_client import get_async_client
 from homeassistant.helpers.typing import ConfigType
 from homeassistant.util import ulid
+import homeassistant.util.dt as dt_util
 
 from .const import (
     CONF_API_VERSION,
@@ -51,6 +52,10 @@ from .const import (
     CONF_TEMPERATURE,
     CONF_TOP_P,
     CONF_USE_TOOLS,
+    CONF_BARNABEE_PERSONALITY,
+    CONF_MEMORY_INTEGRATION,
+    CONF_VOICE_RESPONSE_STYLE,
+    CONF_LEARNING_ENABLED,
     DEFAULT_ATTACH_USERNAME,
     DEFAULT_CHAT_MODEL,
     DEFAULT_CONF_FUNCTIONS,
@@ -63,6 +68,10 @@ from .const import (
     DEFAULT_TEMPERATURE,
     DEFAULT_TOP_P,
     DEFAULT_USE_TOOLS,
+    DEFAULT_BARNABEE_PERSONALITY,
+    DEFAULT_MEMORY_INTEGRATION,
+    DEFAULT_VOICE_RESPONSE_STYLE,
+    DEFAULT_LEARNING_ENABLED,
     DOMAIN,
     EVENT_CONVERSATION_FINISHED,
 )
@@ -80,19 +89,18 @@ _LOGGER = logging.getLogger(__name__)
 
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
-
 # hass.data key for agent.
 DATA_AGENT = "agent"
 
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
-    """Set up OpenAI Conversation."""
+    """Set up Barnabee Assistant."""
     await async_setup_services(hass, config)
     return True
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Set up OpenAI Conversation from a config entry."""
+    """Set up Barnabee Assistant from a config entry."""
 
     try:
         await validate_authentication(
@@ -111,31 +119,40 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     except OpenAIError as err:
         raise ConfigEntryNotReady(err) from err
 
-    agent = OpenAIAgent(hass, entry)
+    agent = BarnabeeAgent(hass, entry)
 
     data = hass.data.setdefault(DOMAIN, {}).setdefault(entry.entry_id, {})
     data[CONF_API_KEY] = entry.data[CONF_API_KEY]
     data[DATA_AGENT] = agent
+    # Store agent reference for services
+    data["agent"] = agent
 
     conversation.async_set_agent(hass, entry, agent)
     return True
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Unload OpenAI."""
+    """Unload Barnabee Assistant."""
     hass.data[DOMAIN].pop(entry.entry_id)
     conversation.async_unset_agent(hass, entry)
     return True
 
 
-class OpenAIAgent(conversation.AbstractConversationAgent):
-    """OpenAI conversation agent."""
+class BarnabeeAgent(conversation.AbstractConversationAgent):
+    """Barnabee conversation agent."""
 
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
         """Initialize the agent."""
         self.hass = hass
         self.entry = entry
         self.history: dict[str, list[dict]] = {}
+        
+        # Barnabee-specific configuration
+        self.personality = entry.options.get(CONF_BARNABEE_PERSONALITY, DEFAULT_BARNABEE_PERSONALITY)
+        self.memory_integration = entry.options.get(CONF_MEMORY_INTEGRATION, DEFAULT_MEMORY_INTEGRATION)
+        self.voice_style = entry.options.get(CONF_VOICE_RESPONSE_STYLE, DEFAULT_VOICE_RESPONSE_STYLE)
+        self.learning_enabled = entry.options.get(CONF_LEARNING_ENABLED, DEFAULT_LEARNING_ENABLED)
+        
         base_url = entry.data.get(CONF_BASE_URL)
         if is_azure(base_url):
             self.client = AsyncAzureOpenAI(
@@ -152,13 +169,63 @@ class OpenAIAgent(conversation.AbstractConversationAgent):
                 organization=entry.data.get(CONF_ORGANIZATION),
                 http_client=get_async_client(hass),
             )
-        # Cache current platform data which gets added to each request (caching done by library)
+        
+        # Cache current platform data (caching done by library)
         _ = hass.async_add_executor_job(self.client.platform_headers)
+        
+        _LOGGER.info("Barnabee Agent initialized with personality: %s, learning: %s", 
+                    self.personality, self.learning_enabled)
 
     @property
     def supported_languages(self) -> list[str] | Literal["*"]:
         """Return a list of supported languages."""
         return MATCH_ALL
+
+    def _enhance_system_message_for_personality(self, base_prompt: str) -> str:
+        """Enhance the system prompt based on Barnabee personality settings."""
+        personality_prompts = {
+            "helpful": "\nI am helpful and professional, providing clear and accurate responses.",
+            "casual": "\nI'm casual and friendly, speaking naturally like a helpful friend.",
+            "concise": "\nI keep my responses brief and to the point, no unnecessary words.",
+            "detailed": "\nI provide thorough explanations and detailed information when helpful.",
+        }
+        
+        voice_style_prompts = {
+            "concise": "\nI respond with short, direct answers.",
+            "detailed": "\nI provide comprehensive responses with context.",
+            "conversational": "\nI speak naturally and conversationally.",
+        }
+        
+        enhanced_prompt = base_prompt
+        enhanced_prompt += personality_prompts.get(self.personality, "")
+        enhanced_prompt += voice_style_prompts.get(self.voice_style, "")
+        
+        if self.learning_enabled:
+            enhanced_prompt += "\nI learn from our conversations to better help you over time."
+        
+        if self.memory_integration:
+            enhanced_prompt += "\nI can remember important information you share with me."
+        
+        return enhanced_prompt
+
+    def _log_learning_opportunity(self, user_input: str, response: str, context: dict):
+        """Log interactions for learning if enabled."""
+        if not self.learning_enabled:
+            return
+            
+        learning_data = {
+            "timestamp": dt_util.utcnow().isoformat(),
+            "user_input": user_input,
+            "response": response,
+            "context": context,
+            "personality": self.personality,
+            "voice_style": self.voice_style,
+        }
+        
+        self.hass.bus.async_fire(
+            "barnabee_assistant.learning.opportunity",
+            learning_data
+        )
 
     async def async_process(
         self, user_input: conversation.ConversationInput
@@ -186,6 +253,7 @@ class OpenAIAgent(conversation.AbstractConversationAgent):
                     response=intent_response, conversation_id=conversation_id
                 )
             messages = [system_message]
+        
         user_message = {"role": "user", "content": user_input.text}
         if self.entry.options.get(CONF_ATTACH_USERNAME, DEFAULT_ATTACH_USERNAME):
             user = user_input.context.user_id
@@ -220,6 +288,13 @@ class OpenAIAgent(conversation.AbstractConversationAgent):
         messages.append(query_response.message.model_dump(exclude_none=True))
         self.history[conversation_id] = messages
 
+        # Log learning opportunity
+        self._log_learning_opportunity(
+            user_input.text, 
+            query_response.message.content, 
+            {"conversation_id": conversation_id, "user_id": user_input.context.user_id}
+        )
+
         self.hass.bus.async_fire(
             EVENT_CONVERSATION_FINISHED,
             {
@@ -239,8 +314,9 @@ class OpenAIAgent(conversation.AbstractConversationAgent):
         self, exposed_entities, user_input: conversation.ConversationInput
     ):
         raw_prompt = self.entry.options.get(CONF_PROMPT, DEFAULT_PROMPT)
-        prompt = self._async_generate_prompt(raw_prompt, exposed_entities, user_input)
-        return {"role": "system", "content": prompt}
+        base_prompt = self._async_generate_prompt(raw_prompt, exposed_entities, user_input)
+        enhanced_prompt = self._enhance_system_message_for_personality(base_prompt)
+        return {"role": "system", "content": enhanced_prompt}
 
     def _async_generate_prompt(
         self,
@@ -330,7 +406,7 @@ class OpenAIAgent(conversation.AbstractConversationAgent):
         messages,
         exposed_entities,
         n_requests,
-    ) -> OpenAIQueryResponse:
+    ) -> BarnabeeQueryResponse:
         """Process a sentence."""
         model = self.entry.options.get(CONF_CHAT_MODEL, DEFAULT_CHAT_MODEL)
         max_tokens = self.entry.options.get(CONF_MAX_TOKENS, DEFAULT_MAX_TOKENS)
@@ -389,7 +465,7 @@ class OpenAIAgent(conversation.AbstractConversationAgent):
         if choice.finish_reason == "length":
             raise TokenLengthExceededError(response.usage.completion_tokens)
 
-        return OpenAIQueryResponse(response=response, message=message)
+        return BarnabeeQueryResponse(response=response, message=message)
 
     async def execute_function_call(
         self,
@@ -398,7 +474,7 @@ class OpenAIAgent(conversation.AbstractConversationAgent):
         message: ChatCompletionMessage,
         exposed_entities,
         n_requests,
-    ) -> OpenAIQueryResponse:
+    ) -> BarnabeeQueryResponse:
         function_name = message.function_call.name
         function = next(
             (s for s in self.get_functions() if s["spec"]["name"] == function_name),
@@ -423,7 +499,7 @@ class OpenAIAgent(conversation.AbstractConversationAgent):
         exposed_entities,
         n_requests,
         function,
-    ) -> OpenAIQueryResponse:
+    ) -> BarnabeeQueryResponse:
         function_executor = get_function_executor(function["function"]["type"])
 
         try:
@@ -451,7 +527,7 @@ class OpenAIAgent(conversation.AbstractConversationAgent):
         message: ChatCompletionMessage,
         exposed_entities,
         n_requests,
-    ) -> OpenAIQueryResponse:
+    ) -> BarnabeeQueryResponse:
         messages.append(message.model_dump(exclude_none=True))
         for tool in message.tool_calls:
             function_name = tool.function.name
@@ -485,7 +561,7 @@ class OpenAIAgent(conversation.AbstractConversationAgent):
         tool,
         exposed_entities,
         function,
-    ) -> OpenAIQueryResponse:
+    ) -> BarnabeeQueryResponse:
         function_executor = get_function_executor(function["function"]["type"])
 
         try:
@@ -499,12 +575,12 @@ class OpenAIAgent(conversation.AbstractConversationAgent):
         return result
 
 
-class OpenAIQueryResponse:
-    """OpenAI query response value object."""
+class BarnabeeQueryResponse:
+    """Barnabee query response value object."""
 
     def __init__(
         self, response: ChatCompletion, message: ChatCompletionMessage
     ) -> None:
-        """Initialize OpenAI query response value object."""
+        """Initialize Barnabee query response value object."""
         self.response = response
         self.message = message

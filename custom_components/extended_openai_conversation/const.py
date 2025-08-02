@@ -9,12 +9,16 @@ CONF_API_VERSION = "api_version"
 CONF_SKIP_AUTHENTICATION = "skip_authentication"
 DEFAULT_SKIP_AUTHENTICATION = False
 
+# Barnabee-specific events
 EVENT_AUTOMATION_REGISTERED = "automation_registered_via_barnabee_assistant"
 EVENT_CONVERSATION_FINISHED = "barnabee_assistant.conversation.finished"
+EVENT_MEMORY_LOGGED = "barnabee_assistant.memory.logged"
+EVENT_PATTERN_LEARNED = "barnabee_assistant.pattern.learned"
 
 CONF_PROMPT = "prompt"
-DEFAULT_PROMPT = """I want you to act as smart home manager of Home Assistant.
-I will provide information of smart home along with a question, you will truthfully make correction or answer using information provided in one sentence in everyday language.
+DEFAULT_PROMPT = """I am Barnabee, your smart home assistant for Home Assistant.
+I provide quick, helpful responses and can control your devices efficiently.
+I learn from our conversations to get better at helping you.
 
 Current Time: {{now()}}
 
@@ -26,11 +30,11 @@ entity_id,name,state,aliases
 {% endfor -%}
 ```
 
-The current state of devices is provided in available devices.
-Use execute_services function only for requested action, not for current states.
-Do not execute service without user's confirmation.
-Do not restate or appreciate what user says, rather make a quick inquiry.
+I respond conversationally and execute requested actions promptly.
+I don't repeat what you said - I just do what you need and confirm briefly.
+Use execute_services function only for requested actions, not for checking current states.
 """
+
 CONF_CHAT_MODEL = "chat_model"
 DEFAULT_CHAT_MODEL = "gpt-4o-mini"
 CONF_MAX_TOKENS = "max_tokens"
@@ -41,6 +45,17 @@ CONF_TEMPERATURE = "temperature"
 DEFAULT_TEMPERATURE = 0.5
 CONF_MAX_FUNCTION_CALLS_PER_CONVERSATION = "max_function_calls_per_conversation"
 DEFAULT_MAX_FUNCTION_CALLS_PER_CONVERSATION = 1
+
+# Barnabee-specific configuration
+CONF_BARNABEE_PERSONALITY = "barnabee_personality"
+DEFAULT_BARNABEE_PERSONALITY = "helpful"
+CONF_MEMORY_INTEGRATION = "memory_integration"
+DEFAULT_MEMORY_INTEGRATION = True
+CONF_VOICE_RESPONSE_STYLE = "voice_response_style"
+DEFAULT_VOICE_RESPONSE_STYLE = "concise"
+CONF_LEARNING_ENABLED = "learning_enabled"
+DEFAULT_LEARNING_ENABLED = True
+
 CONF_FUNCTIONS = "functions"
 DEFAULT_CONF_FUNCTIONS = [
     {
@@ -82,8 +97,47 @@ DEFAULT_CONF_FUNCTIONS = [
             },
         },
         "function": {"type": "native", "name": "execute_service"},
+    },
+    {
+        "spec": {
+            "name": "get_device_status",
+            "description": "Get current status of specific devices with natural language responses",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "device_query": {
+                        "type": "string",
+                        "description": "Natural language query about device status (e.g., 'is the bedroom light on?', 'what's the temperature?')"
+                    }
+                },
+                "required": ["device_query"]
+            }
+        },
+        "function": {"type": "native", "name": "get_device_status"},
+    },
+    {
+        "spec": {
+            "name": "barnabee_memory_log",
+            "description": "Log important information for future reference",
+            "parameters": {
+                "type": "object", 
+                "properties": {
+                    "information": {
+                        "type": "string",
+                        "description": "Information to remember"
+                    },
+                    "category": {
+                        "type": "string",
+                        "description": "Category of information (preference, routine, context, etc.)"
+                    }
+                },
+                "required": ["information", "category"]
+            }
+        },
+        "function": {"type": "native", "name": "barnabee_memory_log"},
     }
 ]
+
 CONF_ATTACH_USERNAME = "attach_username"
 DEFAULT_ATTACH_USERNAME = False
 CONF_USE_TOOLS = "use_tools"
@@ -95,5 +149,6 @@ CONF_CONTEXT_TRUNCATE_STRATEGY = "context_truncate_strategy"
 DEFAULT_CONTEXT_TRUNCATE_STRATEGY = CONTEXT_TRUNCATE_STRATEGIES[0]["key"]
 
 SERVICE_QUERY_IMAGE = "query_image"
+SERVICE_BARNABEE_VOICE_PROCESS = "voice_process"
 
-CONF_PAYLOAD_TEMPLATE
+CONF_PAYLOAD_TEMPLATE = "payload_template"

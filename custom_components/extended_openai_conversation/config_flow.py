@@ -41,6 +41,10 @@ from .const import (
     CONF_TEMPERATURE,
     CONF_TOP_P,
     CONF_USE_TOOLS,
+    CONF_BARNABEE_PERSONALITY,
+    CONF_MEMORY_INTEGRATION,
+    CONF_VOICE_RESPONSE_STYLE,
+    CONF_LEARNING_ENABLED,
     CONTEXT_TRUNCATE_STRATEGIES,
     DEFAULT_ATTACH_USERNAME,
     DEFAULT_CHAT_MODEL,
@@ -56,6 +60,10 @@ from .const import (
     DEFAULT_TEMPERATURE,
     DEFAULT_TOP_P,
     DEFAULT_USE_TOOLS,
+    DEFAULT_BARNABEE_PERSONALITY,
+    DEFAULT_MEMORY_INTEGRATION,
+    DEFAULT_VOICE_RESPONSE_STYLE,
+    DEFAULT_LEARNING_ENABLED,
     DOMAIN,
 )
 from .helpers import validate_authentication
@@ -90,6 +98,11 @@ DEFAULT_OPTIONS = types.MappingProxyType(
         CONF_USE_TOOLS: DEFAULT_USE_TOOLS,
         CONF_CONTEXT_THRESHOLD: DEFAULT_CONTEXT_THRESHOLD,
         CONF_CONTEXT_TRUNCATE_STRATEGY: DEFAULT_CONTEXT_TRUNCATE_STRATEGY,
+        # Barnabee-specific options
+        CONF_BARNABEE_PERSONALITY: DEFAULT_BARNABEE_PERSONALITY,
+        CONF_MEMORY_INTEGRATION: DEFAULT_MEMORY_INTEGRATION,
+        CONF_VOICE_RESPONSE_STYLE: DEFAULT_VOICE_RESPONSE_STYLE,
+        CONF_LEARNING_ENABLED: DEFAULT_LEARNING_ENABLED,
     }
 )
 
@@ -177,14 +190,14 @@ class OptionsFlow(config_entries.OptionsFlow):
             return self.async_create_entry(
                 title=user_input.get(CONF_NAME, DEFAULT_NAME), data=user_input
             )
-        schema = self.openai_config_option_schema(self.config_entry.options)
+        schema = self.barnabee_config_option_schema(self.config_entry.options)
         return self.async_show_form(
             step_id="init",
             data_schema=vol.Schema(schema),
         )
 
-    def openai_config_option_schema(self, options: MappingProxyType[str, Any]) -> dict:
-        """Return a schema for OpenAI completion options."""
+    def barnabee_config_option_schema(self, options: MappingProxyType[str, Any]) -> dict:
+        """Return a schema for Barnabee completion options."""
         if not options:
             options = DEFAULT_OPTIONS
 
@@ -197,7 +210,6 @@ class OptionsFlow(config_entries.OptionsFlow):
             vol.Optional(
                 CONF_CHAT_MODEL,
                 description={
-                    # New key in HA 2023.4
                     "suggested_value": options.get(CONF_CHAT_MODEL, DEFAULT_CHAT_MODEL)
                 },
                 default=DEFAULT_CHAT_MODEL,
@@ -259,4 +271,44 @@ class OptionsFlow(config_entries.OptionsFlow):
                     mode=SelectSelectorMode.DROPDOWN,
                 )
             ),
+            # Barnabee-specific configuration options
+            vol.Optional(
+                CONF_BARNABEE_PERSONALITY,
+                description={"suggested_value": options.get(CONF_BARNABEE_PERSONALITY)},
+                default=DEFAULT_BARNABEE_PERSONALITY,
+            ): SelectSelector(
+                SelectSelectorConfig(
+                    options=[
+                        SelectOptionDict(value="helpful", label="Helpful & Professional"),
+                        SelectOptionDict(value="casual", label="Casual & Friendly"),
+                        SelectOptionDict(value="concise", label="Brief & Direct"),
+                        SelectOptionDict(value="detailed", label="Detailed & Explanatory"),
+                    ],
+                    mode=SelectSelectorMode.DROPDOWN,
+                )
+            ),
+            vol.Optional(
+                CONF_MEMORY_INTEGRATION,
+                description={"suggested_value": options.get(CONF_MEMORY_INTEGRATION)},
+                default=DEFAULT_MEMORY_INTEGRATION,
+            ): BooleanSelector(),
+            vol.Optional(
+                CONF_VOICE_RESPONSE_STYLE,
+                description={"suggested_value": options.get(CONF_VOICE_RESPONSE_STYLE)},
+                default=DEFAULT_VOICE_RESPONSE_STYLE,
+            ): SelectSelector(
+                SelectSelectorConfig(
+                    options=[
+                        SelectOptionDict(value="concise", label="Concise Responses"),
+                        SelectOptionDict(value="detailed", label="Detailed Responses"),
+                        SelectOptionDict(value="conversational", label="Conversational"),
+                    ],
+                    mode=SelectSelectorMode.DROPDOWN,
+                )
+            ),
+            vol.Optional(
+                CONF_LEARNING_ENABLED,
+                description={"suggested_value": options.get(CONF_LEARNING_ENABLED)},
+                default=DEFAULT_LEARNING_ENABLED,
+            ): BooleanSelector(),
         }

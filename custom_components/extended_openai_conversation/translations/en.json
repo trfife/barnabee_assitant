@@ -32,7 +32,11 @@
                     "attach_username": "Attach Username to Message",
                     "use_tools": "Use Tools",
                     "context_threshold": "Context Threshold",
-                    "context_truncate_strategy": "Context truncation strategy when exceeded threshold"
+                    "context_truncate_strategy": "Context truncation strategy when exceeded threshold",
+                    "barnabee_personality": "Barnabee Personality Style",
+                    "memory_integration": "Enable Memory Integration",
+                    "voice_response_style": "Voice Response Style",
+                    "learning_enabled": "Enable Learning from Conversations"
                 }
             }
         }
@@ -54,7 +58,7 @@
                 "prompt": {
                     "name": "Prompt",
                     "description": "The text to ask about image",
-                    "example": "What’s in this image?"
+                    "example": "What's in this image?"
                 },
                 "images": {
                     "name": "Images",
@@ -65,6 +69,38 @@
                     "name": "Max Tokens",
                     "description": "The maximum tokens",
                     "example": "300"
+                }
+            }
+        },
+        "voice_process": {
+            "name": "Process Voice Input",
+            "description": "Process voice input through Barnabee Assistant",
+            "fields": {
+                "config_entry": {
+                    "name": "Config Entry",
+                    "description": "The Barnabee Assistant config entry to use"
+                },
+                "text": {
+                    "name": "Text",
+                    "description": "The voice input text to process",
+                    "example": "Turn on the living room lights"
+                },
+                "user_id": {
+                    "name": "User ID",
+                    "description": "Optional user identifier"
+                },
+                "session_id": {
+                    "name": "Session ID", 
+                    "description": "Optional session identifier"
+                },
+                "conversation_id": {
+                    "name": "Conversation ID",
+                    "description": "Optional conversation identifier"
+                },
+                "source": {
+                    "name": "Source",
+                    "description": "Source of the voice input",
+                    "example": "barnabee_voice"
                 }
             }
         }
