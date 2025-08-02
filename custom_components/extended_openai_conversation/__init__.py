@@ -155,7 +155,7 @@ class SmartBarnabeeAgent(conversation.AbstractConversationAgent):
         self.learning_enabled = entry.options.get(CONF_LEARNING_ENABLED, DEFAULT_LEARNING_ENABLED)
         
         # Node-RED endpoint for fallback
-        self.nodered_url = "http://localhost:1880/voice-input"  # Update this to your Node-RED URL
+        self.nodered_url = "http://192.168.86.50:1880/voice-input"  # Update this to your Node-RED URL
         
         base_url = entry.data.get(CONF_BASE_URL)
         if is_azure(base_url):
