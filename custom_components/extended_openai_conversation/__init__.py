@@ -20,9 +20,6 @@ from .services import async_setup_services
 
 _LOGGER = logging.getLogger(__name__)
 
-# hass.data key for agent.
-DATA_AGENT = "agent"
-
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """Set up Barnabee Assistant."""
@@ -36,7 +33,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     data = hass.data.setdefault(DOMAIN, {}).setdefault(entry.entry_id, {})
     data[DATA_AGENT] = agent
-    data["agent"] = agent
 
     conversation.async_set_agent(hass, entry, agent)
     return True
@@ -62,7 +58,7 @@ class SimpleBarnabeeAgent(conversation.AbstractConversationAgent):
         if not self.nodered_url.endswith('/voice-input'):
             self.nodered_url = f"{self.nodered_url}/voice-input"
         
-        _LOGGER.info("Simple Barnabee Agent initialized - routing to Node-RED brain")
+        _LOGGER.info("Barnabee Agent initialized - routing to Node-RED at %s", self.nodered_url)
 
     @property
     def supported_languages(self) -> list[str] | Literal["*"]:
@@ -75,41 +71,23 @@ class SimpleBarnabeeAgent(conversation.AbstractConversationAgent):
         """Route everything directly to Node-RED brain."""
         
         conversation_id = user_input.conversation_id or ulid.ulid()
-        user_input.conversation_id = conversation_id
-        
         text = user_input.text.strip()
-        _LOGGER.info(f"[BARNABEE] Routing to Node-RED: '{text}'")
         
         # Call Node-RED brain
         try:
-            nodered_response = await self._call_nodered(text, user_input)
+            response_text = await self._call_nodered(text, user_input)
             
-            if nodered_response:
-                _LOGGER.info(f"[BARNABEE] Node-RED response: {nodered_response}")
-                
-                # Fire success event
-                self.hass.bus.async_fire(
-                    "barnabee_assistant.response",
-                    {
-                        "text": text,
-                        "response": nodered_response,
-                        "conversation_id": conversation_id,
-                        "timestamp": dt_util.utcnow().isoformat(),
-                    }
-                )
-                
+            if response_text:
                 intent_response = intent.IntentResponse(language=user_input.language)
-                intent_response.async_set_speech(nodered_response)
+                intent_response.async_set_speech(response_text)
                 return conversation.ConversationResult(
                     response=intent_response, conversation_id=conversation_id
                 )
             
         except Exception as e:
-            _LOGGER.error(f"[BARNABEE] Node-RED call failed: {e}")
+            _LOGGER.error("Node-RED call failed: %s", e)
         
         # Fallback
-        _LOGGER.warning("[BARNABEE] Node-RED failed, using fallback response")
-        
         intent_response = intent.IntentResponse(language=user_input.language)
         intent_response.async_set_speech("I'm sorry, I couldn't process that request.")
         return conversation.ConversationResult(
@@ -130,23 +108,15 @@ class SimpleBarnabeeAgent(conversation.AbstractConversationAgent):
             "source": "home_assistant"
         }
         
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    self.nodered_url,
-                    json=payload,
-                    timeout=aiohttp.ClientTimeout(total=10)
-                ) as response:
-                    if response.status == 200:
-                        result = await response.json()
-                        return result.get("reply", "No response from Barnabee brain")
-                    else:
-                        _LOGGER.error(f"Node-RED returned status {response.status}")
-                        return None
-                        
-        except aiohttp.ClientError as e:
-            _LOGGER.error(f"Failed to call Node-RED: {e}")
-            return None
-        except Exception as e:
-            _LOGGER.error(f"Unexpected error calling Node-RED: {e}")
-            return None
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                self.nodered_url,
+                json=payload,
+                timeout=aiohttp.ClientTimeout(total=10)
+            ) as response:
+                if response.status == 200:
+                    result = await response.json()
+                    return result.get("reply", "No response from Barnabee")
+                else:
+                    _LOGGER.error("Node-RED returned status %s", response.status)
+                    return None
