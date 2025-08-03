@@ -205,6 +205,8 @@ class NativeFunctionExecutor(FunctionExecutor):
         exposed_entities,
     ):
         name = function["name"]
+        
+        # ORIGINAL FUNCTIONS
         if name == "execute_service":
             return await self.execute_service(
                 hass, function, arguments, user_input, exposed_entities
@@ -234,7 +236,237 @@ class NativeFunctionExecutor(FunctionExecutor):
                 hass, function, arguments, user_input, exposed_entities
             )
 
+        # NEW ENHANCED FUNCTIONS FOR BARNABEE
+        if name == "get_device_status":
+            return await self.get_device_status(
+                hass, function, arguments, user_input, exposed_entities
+            )
+        if name == "barnabee_memory_log":
+            return await self.barnabee_memory_log(
+                hass, function, arguments, user_input, exposed_entities
+            )
+        if name == "execute_complex_service":
+            return await self.execute_complex_service(
+                hass, function, arguments, user_input, exposed_entities
+            )
+        if name == "get_entity_attributes":
+            return await self.get_entity_attributes(
+                hass, function, arguments, user_input, exposed_entities
+            )
+
         raise NativeNotFound(name)
+
+    async def get_device_status(
+        self,
+        hass: HomeAssistant,
+        function,
+        arguments,
+        user_input: conversation.ConversationInput,
+        exposed_entities,
+    ):
+        """Get current status of devices with natural language responses."""
+        device_query = arguments.get("device_query", "")
+        
+        # Parse natural language queries for device status
+        status_patterns = [
+            (r"is (?:the )?(.+?) (?:turned |switched )?(on|off)", "binary_state"),
+            (r"what(?:'s| is) (?:the )?(.+?) (?:set to|at)", "current_value"),
+            (r"(?:show|tell me|check) (?:the )?(.+?) status", "full_status"),
+            (r"what(?:'s| is) (?:the )?temperature (?:in |of )?(?:the )?(.+)", "temperature"),
+            (r"is (?:the )?(.+?) door (?:open|closed)", "door_state"),
+            (r"what(?:'s| is) (?:the )?(.+?) brightness", "brightness"),
+        ]
+        
+        for pattern, query_type in status_patterns:
+            match = re.search(pattern, device_query.lower())
+            if match:
+                entity_name = match.group(1).strip()
+                
+                # Find matching entity
+                matching_entities = []
+                for entity in exposed_entities:
+                    if (entity_name in entity["name"].lower() or 
+                        entity_name in entity["entity_id"].lower() or
+                        any(entity_name in alias.lower() for alias in entity.get("aliases", []))):
+                        matching_entities.append(entity)
+                
+                if not matching_entities:
+                    return f"I couldn't find a device named '{entity_name}'"
+                
+                if len(matching_entities) > 1:
+                    entity_names = [e["name"] for e in matching_entities[:3]]
+                    return f"Found multiple devices: {', '.join(entity_names)}. Please be more specific."
+                
+                entity = matching_entities[0]
+                entity_id = entity["entity_id"]
+                state = hass.states.get(entity_id)
+                
+                if not state:
+                    return f"The {entity['name']} is not available"
+                
+                # Format response based on query type
+                if query_type == "binary_state":
+                    target_state = match.group(2) if len(match.groups()) > 1 else None
+                    current_state = state.state.lower()
+                    if target_state:
+                        is_match = current_state == target_state
+                        return f"{'Yes' if is_match else 'No'}, the {entity['name']} is {current_state}"
+                    else:
+                        return f"The {entity['name']} is {current_state}"
+                        
+                elif query_type == "temperature":
+                    if state.attributes.get("unit_of_measurement") in ["°C", "°F"]:
+                        temp = state.state
+                        unit = state.attributes.get("unit_of_measurement", "")
+                        return f"The temperature in {entity['name']} is {temp}{unit}"
+                    else:
+                        return f"The {entity['name']} is not a temperature sensor"
+                        
+                elif query_type == "door_state":
+                    if state.state in ["open", "closed"]:
+                        return f"The {entity['name']} door is {state.state}"
+                    else:
+                        return f"The {entity['name']} is {state.state}"
+                        
+                elif query_type == "brightness":
+                    brightness = state.attributes.get("brightness")
+                    if brightness is not None:
+                        percent = int((brightness / 255) * 100)
+                        return f"The {entity['name']} brightness is {percent}%"
+                    else:
+                        return f"The {entity['name']} doesn't have brightness control"
+                        
+                else:  # full_status
+                    attrs = []
+                    if state.attributes.get("brightness"):
+                        brightness = int((state.attributes["brightness"] / 255) * 100)
+                        attrs.append(f"brightness {brightness}%")
+                    if state.attributes.get("temperature"):
+                        temp = state.attributes["temperature"]
+                        unit = state.attributes.get("unit_of_measurement", "")
+                        attrs.append(f"temperature {temp}{unit}")
+                    
+                    attr_str = f" ({', '.join(attrs)})" if attrs else ""
+                    return f"The {entity['name']} is {state.state}{attr_str}"
+        
+        return f"I'm not sure how to check '{device_query}'. Try asking 'is the living room light on?' or 'what's the temperature?'"
+
+    async def barnabee_memory_log(
+        self,
+        hass: HomeAssistant,
+        function,
+        arguments,
+        user_input: conversation.ConversationInput,
+        exposed_entities,
+    ):
+        """Log important information for future reference via Node-RED."""
+        information = arguments.get("information", "")
+        category = arguments.get("category", "general")
+        
+        # Send to Node-RED for memory processing
+        import aiohttp
+        
+        try:
+            async with aiohttp.ClientSession() as session:
+                payload = {
+                    "type": "memory_log",
+                    "information": information,
+                    "category": category,
+                    "timestamp": dt_util.utcnow().isoformat(),
+                    "user_id": user_input.context.user_id,
+                    "conversation_id": user_input.conversation_id
+                }
+                
+                async with session.post(
+                    "http://192.168.86.50:1880/notify",  # Node-RED endpoint
+                    json=payload,
+                    timeout=aiohttp.ClientTimeout(total=5)
+                ) as response:
+                    if response.status == 200:
+                        return f"I've remembered: {information}"
+                    else:
+                        return "I had trouble saving that information"
+                        
+        except Exception as e:
+            _LOGGER.warning(f"Failed to log memory: {e}")
+            return "I had trouble saving that information"
+
+    async def execute_complex_service(
+        self,
+        hass: HomeAssistant,
+        function,
+        arguments,
+        user_input: conversation.ConversationInput,
+        exposed_entities,
+    ):
+        """Execute complex multi-step service calls."""
+        services = arguments.get("services", [])
+        results = []
+        
+        for service_def in services:
+            try:
+                domain = service_def["domain"]
+                service = service_def["service"]
+                service_data = service_def.get("service_data", {})
+                
+                # Validate entities
+                entity_ids = service_data.get("entity_id", [])
+                if isinstance(entity_ids, str):
+                    entity_ids = [entity_ids]
+                
+                self.validate_entity_ids(hass, entity_ids, exposed_entities)
+                
+                # Execute service
+                result = await hass.services.async_call(
+                    domain=domain,
+                    service=service,
+                    service_data=service_data,
+                    blocking=True,
+                    return_response=True
+                )
+                
+                results.append({
+                    "service": f"{domain}.{service}",
+                    "success": True,
+                    "result": result
+                })
+                
+            except Exception as e:
+                results.append({
+                    "service": f"{service_def.get('domain', 'unknown')}.{service_def.get('service', 'unknown')}",
+                    "success": False,
+                    "error": str(e)
+                })
+        
+        return results
+
+    async def get_entity_attributes(
+        self,
+        hass: HomeAssistant,
+        function,
+        arguments,
+        user_input: conversation.ConversationInput,
+        exposed_entities,
+    ):
+        """Get detailed attributes of entities."""
+        entity_id = arguments.get("entity_id")
+        
+        # Validate entity is exposed
+        self.validate_entity_ids(hass, [entity_id], exposed_entities)
+        
+        state = hass.states.get(entity_id)
+        if not state:
+            raise EntityNotFound(entity_id)
+        
+        # Return comprehensive entity information
+        return {
+            "entity_id": entity_id,
+            "state": state.state,
+            "attributes": dict(state.attributes),
+            "last_changed": state.last_changed.isoformat(),
+            "last_updated": state.last_updated.isoformat(),
+            "friendly_name": state.attributes.get("friendly_name", entity_id)
+        }
 
     async def execute_service_single(
         self,
