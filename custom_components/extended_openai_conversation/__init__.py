@@ -1,4 +1,4 @@
-"""The Barnabee Assistant integration - Simple Node-RED Bridge."""
+"""The Barnabee Assistant integration."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from homeassistant.components import conversation
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import MATCH_ALL
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers import intent
+from homeassistant.helpers import intent, area_registry, entity_registry
 from homeassistant.helpers.typing import ConfigType
 from homeassistant.util import ulid
 import homeassistant.util.dt as dt_util
@@ -29,7 +29,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Barnabee Assistant from a config entry."""
-    agent = SimpleBarnabeeAgent(hass, entry)
+    agent = BarnabeeAgent(hass, entry)
 
     data = hass.data.setdefault(DOMAIN, {}).setdefault(entry.entry_id, {})
     data[DATA_AGENT] = agent
@@ -45,8 +45,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     return True
 
 
-class SimpleBarnabeeAgent(conversation.AbstractConversationAgent):
-    """Simple Barnabee conversation agent - routes everything to Node-RED brain."""
+class BarnabeeAgent(conversation.AbstractConversationAgent):
+    """Barnabee conversation agent - routes to Node-RED with HA context."""
 
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
         """Initialize the agent."""
@@ -68,12 +68,12 @@ class SimpleBarnabeeAgent(conversation.AbstractConversationAgent):
     async def async_process(
         self, user_input: conversation.ConversationInput
     ) -> conversation.ConversationResult:
-        """Route everything directly to Node-RED brain."""
+        """Route to Node-RED with full HA context."""
         
         conversation_id = user_input.conversation_id or ulid.ulid()
         text = user_input.text.strip()
         
-        # Call Node-RED brain
+        # Call Node-RED with HA context
         try:
             response_text = await self._call_nodered(text, user_input)
             
@@ -95,17 +95,41 @@ class SimpleBarnabeeAgent(conversation.AbstractConversationAgent):
         )
 
     async def _call_nodered(self, text: str, user_input: conversation.ConversationInput) -> str | None:
-        """Call Node-RED brain for processing."""
+        """Call Node-RED with full HA context including exposed entities."""
+        
+        # Get exposed entities
+        exposed_entities = await self._get_exposed_entities()
+        
+        # Get area info if device is specified
+        area_name = None
+        if user_input.device_id:
+            area_reg = area_registry.async_get(self.hass)
+            ent_reg = entity_registry.async_get(self.hass)
+            
+            # Try to find entity for this device
+            entities = entity_registry.async_entries_for_device(ent_reg, user_input.device_id)
+            if entities:
+                area_id = entities[0].area_id
+                if area_id:
+                    area = area_reg.async_get_area(area_id)
+                    if area:
+                        area_name = area.name
         
         payload = {
+            "text": text,
             "originalText": text,
-            "command": text,
             "hasWakeWord": True,
             "wakeWord": "assistant",
             "sessionId": user_input.conversation_id,
             "userId": user_input.context.user_id or "ha_user",
             "confidence": 1.0,
-            "source": "home_assistant"
+            "source": "home_assistant",
+            "context": {
+                "current_time": dt_util.now().isoformat(),
+                "area_name": area_name,
+                "device_id": user_input.device_id,
+                "exposed_entities": exposed_entities
+            }
         }
         
         async with aiohttp.ClientSession() as session:
@@ -120,3 +144,43 @@ class SimpleBarnabeeAgent(conversation.AbstractConversationAgent):
                 else:
                     _LOGGER.error("Node-RED returned status %s", response.status)
                     return None
+
+    async def _get_exposed_entities(self) -> list[dict]:
+        """Get all entities exposed to conversation."""
+        exposed_entities = []
+        
+        area_reg = area_registry.async_get(self.hass)
+        ent_reg = entity_registry.async_get(self.hass)
+        
+        for state in self.hass.states.async_all():
+            entity_id = state.entity_id
+            
+            # Check if exposed to conversation
+            if not conversation.async_should_expose(self.hass, "conversation", entity_id):
+                continue
+            
+            # Get entity registry entry for additional info
+            entity_entry = ent_reg.async_get(entity_id)
+            
+            # Get area
+            area_id = None
+            if entity_entry and entity_entry.area_id:
+                area_id = entity_entry.area_id
+            elif entity_entry and entity_entry.device_id:
+                # Try to get area from device
+                area_id = area_reg.async_get_area_id_for_device_id(entity_entry.device_id)
+            
+            # Build entity info
+            entity_info = {
+                "entity_id": entity_id,
+                "name": state.name or entity_id,
+                "state": state.state,
+                "area_id": area_id,
+                "domain": entity_id.split(".")[0],
+                "aliases": list(entity_entry.aliases) if entity_entry and entity_entry.aliases else []
+            }
+            
+            exposed_entities.append(entity_info)
+        
+        _LOGGER.debug("Exposed %d entities to Barnabee", len(exposed_entities))
+        return exposed_entities

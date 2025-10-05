@@ -5,7 +5,7 @@ DEFAULT_NAME = "Barnabee Assistant"
 
 # Configuration keys
 CONF_NODERED_URL = "nodered_url"
-DEFAULT_NODERED_URL = "http://192.168.86.50:1880"
+DEFAULT_NODERED_URL = "http://192.168.86.61:1880"
 
 # Events
 EVENT_CONVERSATION_FINISHED = "barnabee_assistant.conversation.finished"
