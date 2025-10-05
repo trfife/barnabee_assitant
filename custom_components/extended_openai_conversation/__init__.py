@@ -10,7 +10,7 @@ from homeassistant.components import conversation
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import MATCH_ALL
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers import intent, area_registry, entity_registry
+from homeassistant.helpers import intent, area_registry, entity_registry, device_registry
 from homeassistant.helpers.typing import ConfigType
 from homeassistant.util import ulid
 import homeassistant.util.dt as dt_util
@@ -73,6 +73,8 @@ class BarnabeeAgent(conversation.AbstractConversationAgent):
         conversation_id = user_input.conversation_id or ulid.ulid()
         text = user_input.text.strip()
         
+        _LOGGER.info("Processing: '%s'", text)
+        
         # Call Node-RED with HA context
         try:
             response_text = await self._call_nodered(text, user_input)
@@ -85,7 +87,7 @@ class BarnabeeAgent(conversation.AbstractConversationAgent):
                 )
             
         except Exception as e:
-            _LOGGER.error("Node-RED call failed: %s", e)
+            _LOGGER.error("Node-RED call failed: %s", e, exc_info=True)
         
         # Fallback
         intent_response = intent.IntentResponse(language=user_input.language)
@@ -95,25 +97,26 @@ class BarnabeeAgent(conversation.AbstractConversationAgent):
         )
 
     async def _call_nodered(self, text: str, user_input: conversation.ConversationInput) -> str | None:
-        """Call Node-RED with full HA context including exposed entities."""
+        """Call Node-RED with full HA context including entities."""
         
-        # Get exposed entities
-        exposed_entities = await self._get_exposed_entities()
+        _LOGGER.debug("Starting Node-RED call for: %s", text)
+        
+        # Get all entities
+        all_entities = await self._get_all_entities()
+        _LOGGER.debug("Collected %d entities", len(all_entities))
         
         # Get area info if device is specified
         area_name = None
+        area_id = None
         if user_input.device_id:
-            area_reg = area_registry.async_get(self.hass)
-            ent_reg = entity_registry.async_get(self.hass)
-            
-            # Try to find entity for this device
-            entities = entity_registry.async_entries_for_device(ent_reg, user_input.device_id)
-            if entities:
-                area_id = entities[0].area_id
-                if area_id:
-                    area = area_reg.async_get_area(area_id)
-                    if area:
-                        area_name = area.name
+            dev_reg = device_registry.async_get(self.hass)
+            device = dev_reg.async_get(user_input.device_id)
+            if device and device.area_id:
+                area_reg = area_registry.async_get(self.hass)
+                area = area_reg.async_get_area(device.area_id)
+                if area:
+                    area_name = area.name
+                    area_id = device.area_id
         
         payload = {
             "text": text,
@@ -127,10 +130,13 @@ class BarnabeeAgent(conversation.AbstractConversationAgent):
             "context": {
                 "current_time": dt_util.now().isoformat(),
                 "area_name": area_name,
+                "area_id": area_id,
                 "device_id": user_input.device_id,
-                "exposed_entities": exposed_entities
+                "entities": all_entities
             }
         }
+        
+        _LOGGER.debug("Calling Node-RED at %s", self.nodered_url)
         
         async with aiohttp.ClientSession() as session:
             async with session.post(
@@ -138,16 +144,21 @@ class BarnabeeAgent(conversation.AbstractConversationAgent):
                 json=payload,
                 timeout=aiohttp.ClientTimeout(total=10)
             ) as response:
+                _LOGGER.debug("Node-RED responded with status %d", response.status)
                 if response.status == 200:
                     result = await response.json()
-                    return result.get("reply", "No response from Barnabee")
+                    reply = result.get("reply", "No response from Barnabee")
+                    _LOGGER.info("Node-RED replied: %s", reply)
+                    return reply
                 else:
                     _LOGGER.error("Node-RED returned status %s", response.status)
+                    response_text = await response.text()
+                    _LOGGER.error("Response body: %s", response_text)
                     return None
 
-    async def _get_exposed_entities(self) -> list[dict]:
-        """Get all entities exposed to conversation."""
-        exposed_entities = []
+    async def _get_all_entities(self) -> list[dict]:
+        """Get all entities (Node-RED will filter by barnabee label)."""
+        entities_list = []
         
         area_reg = area_registry.async_get(self.hass)
         ent_reg = entity_registry.async_get(self.hass)
@@ -155,20 +166,27 @@ class BarnabeeAgent(conversation.AbstractConversationAgent):
         for state in self.hass.states.async_all():
             entity_id = state.entity_id
             
-            # Check if exposed to conversation
-            if not conversation.async_should_expose(self.hass, "conversation", entity_id):
-                continue
-            
-            # Get entity registry entry for additional info
+            # Get entity registry entry
             entity_entry = ent_reg.async_get(entity_id)
+            
+            # Skip disabled entities
+            if entity_entry and entity_entry.disabled:
+                continue
             
             # Get area
             area_id = None
             if entity_entry and entity_entry.area_id:
                 area_id = entity_entry.area_id
-            elif entity_entry and entity_entry.device_id:
-                # Try to get area from device
-                area_id = area_reg.async_get_area_id_for_device_id(entity_entry.device_id)
+            
+            # Get labels (including 'barnabee' label for filtering)
+            labels = []
+            if entity_entry and entity_entry.labels:
+                labels = list(entity_entry.labels)
+            
+            # Get attributes for sensors
+            attributes = None
+            if entity_id.startswith(('sensor.', 'binary_sensor.', 'weather.', 'climate.')):
+                attributes = dict(state.attributes)
             
             # Build entity info
             entity_info = {
@@ -177,10 +195,11 @@ class BarnabeeAgent(conversation.AbstractConversationAgent):
                 "state": state.state,
                 "area_id": area_id,
                 "domain": entity_id.split(".")[0],
-                "aliases": list(entity_entry.aliases) if entity_entry and entity_entry.aliases else []
+                "labels": labels,
+                "aliases": list(entity_entry.aliases) if entity_entry and entity_entry.aliases else [],
+                "attributes": attributes
             }
             
-            exposed_entities.append(entity_info)
+            entities_list.append(entity_info)
         
-        _LOGGER.debug("Exposed %d entities to Barnabee", len(exposed_entities))
-        return exposed_entities
+        return entities_list
