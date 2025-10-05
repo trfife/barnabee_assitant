@@ -378,7 +378,7 @@ class NativeFunctionExecutor(FunctionExecutor):
                 }
                 
                 async with session.post(
-                    "http://192.168.86.50:1880/notify",  # Node-RED endpoint
+                    "http://192.168.86.61:1880/notify",  # Node-RED endpoint
                     json=payload,
                     timeout=aiohttp.ClientTimeout(total=5)
                 ) as response:
